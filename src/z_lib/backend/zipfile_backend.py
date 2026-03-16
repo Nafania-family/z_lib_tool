@@ -12,24 +12,34 @@ from ..exceptions import ZipPathError
 _FLAG_UTF8 = 0x800
 
 
-def _decode_zip_filename(info: zipfile.ZipInfo) -> str:
+def _decode_zip_filename(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> str:
     """
     ZIPエントリ名を正しくデコードして返す。
-
-    - UTF-8フラグ(bit11)が立っている場合: そのまま返す（zipfileが正しく処理済み）
-    - そうでない場合: CP437として読まれたバイト列をCP932として再デコードする
+    ダメ文字(\x5c)に対応するため、元の生バイト列を直接取得してデコードする。
     """
     if info.flag_bits & _FLAG_UTF8:
-        # zipfile が UTF-8 として正しくデコード済み
         return info.filename
 
-    # zipfile は UTF-8 フラグなしのエントリを CP437 として読むので、
-    # 一度 CP437 のバイト列に戻してから CP932 として解釈する
-    raw_bytes = info.filename.encode("cp437")
     try:
+        current_pos = zf.fp.tell()
+        zf.fp.seek(info.header_offset)
+        header = zf.fp.read(30)
+        # Check Local File Header signature
+        if header[:4] == b'PK\x03\x04':
+            name_len = int.from_bytes(header[26:28], 'little')
+            raw_bytes = zf.fp.read(name_len)
+            zf.fp.seek(current_pos)
+            # Replace backslashes with slashes for safety before returning
+            return raw_bytes.decode("cp932").replace("\\", "/")
+        zf.fp.seek(current_pos)
+    except Exception:
+        pass
+
+    # フォールバック (レガシー)
+    try:
+        raw_bytes = info.filename.encode("cp437")
         return raw_bytes.decode("cp932")
     except (UnicodeDecodeError, ValueError):
-        # CP932 でも失敗した場合は元の文字列を返す（フォールバック）
         return info.filename
 
 
@@ -39,10 +49,10 @@ def _extract_with_encoding(zf: zipfile.ZipFile, dest_dir: str) -> None:
     各エントリ名を正しくデコードしてからdest_dirへ展開する。
     """
     for info in zf.infolist():
-        correct_name = _decode_zip_filename(info)
+        correct_name = _decode_zip_filename(zf, info)
         dest_path = Path(dest_dir) / correct_name
 
-        if correct_name.endswith("/"):
+        if correct_name.endswith("/") or info.is_dir():
             # ディレクトリエントリ
             dest_path.mkdir(parents=True, exist_ok=True)
         else:
