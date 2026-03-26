@@ -5,11 +5,12 @@ from typing import Tuple, Optional, Any, Dict
 from .exceptions import ZipPathError, ZipNotLoadedError
 from ._types import ZipHandle
 
-def normalize_path(path: str) -> str:
+def normalize_path(path: Any) -> str:
     """
     Normalize path separators to forward slashes for internal consistency.
+    Accepts both str and pathlib.Path objects.
     """
-    return path.replace("\\", "/")
+    return str(path).replace("\\", "/")
 
 def split_zip_path(path: str) -> Tuple[Optional[str], str]:
     """
