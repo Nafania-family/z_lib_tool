@@ -51,7 +51,14 @@ class Z_Lib:
         session, _ = find_matching_session(path, self._sessions)
         return session
 
-    def load_zip(self, *paths: str, create: bool = False, mode: OpenMode = "r") -> None:
+    def load_zip(
+        self,
+        *paths: str,
+        create: bool = False,
+        mode: OpenMode = "r",
+        exp_positive: Optional[List[str]] = None,
+        exp_negative: Optional[List[str]] = None,
+    ) -> None:
         """
         ZIPファイルをマウントし、操作可能な状態にする。
         意図しない破損を防ぐため既定モードは "r" (読み取り専用)。
@@ -61,8 +68,13 @@ class Z_Lib:
         for path in paths:
             lookup_key = normalize_lookup_key(path)
             if lookup_key in self._sessions:
-                self._log(f"  📦 [Z_Lib] LOAD  ⚡ already loaded — skipped   › {lookup_key}")
-                continue
+                existing = self._sessions[lookup_key]
+                if existing.exp_positive == exp_positive and existing.exp_negative == exp_negative:
+                    self._log(f"  📦 [Z_Lib] LOAD  ⚡ already loaded — skipped   › {lookup_key}")
+                    continue
+                self._log(f"  📦 [Z_Lib] LOAD  🔄 reloading with new filter   › {lookup_key}")
+                existing.close(save=False)
+                del self._sessions[lookup_key]
 
             action = "create" if create else "open"
             self._log(f"  📦 [Z_Lib] LOAD  ▶  mode={effective_mode!r}  [{action}]   › {path}")
@@ -72,6 +84,8 @@ class Z_Lib:
                 create=create,
                 workspace_dir=self.workspace_dir,
                 on_progress=self.on_progress,
+                exp_positive=exp_positive,
+                exp_negative=exp_negative,
             )
             self._sessions[lookup_key] = session
             self._log(f"     └─ ✅ mounted   temp_dir={session.temp_dir}")
@@ -94,7 +108,14 @@ class Z_Lib:
             del self._sessions[lookup_key]
             self._log("     └─ ✅ closed")
 
-    def swap_zip(self, target_zips: List[str], create: bool = False, mode: OpenMode = "r") -> None:
+    def swap_zip(
+        self,
+        target_zips: List[str],
+        create: bool = False,
+        mode: OpenMode = "r",
+        exp_positive: Optional[List[str]] = None,
+        exp_negative: Optional[List[str]] = None,
+    ) -> None:
         """
         現在のロード状態を指定リストの状態と同期させる。
         差分のみをロード/アンロードし、同一ZIPの無駄な開閉を防ぐ。
@@ -118,11 +139,35 @@ class Z_Lib:
 
         for key in to_load:
             original_arg = target_map[key]
-            self.load_zip(original_arg, create=create, mode=mode)
+            self.load_zip(
+                original_arg,
+                create=create,
+                mode=mode,
+                exp_positive=exp_positive,
+                exp_negative=exp_negative,
+            )
+
+        # 保持対象でもフィルター指定が変更されていれば load_zip 側で再ロードが行われる
+        for key in unchanged:
+            original_arg = target_map[key]
+            self.load_zip(
+                original_arg,
+                create=create,
+                mode=mode,
+                exp_positive=exp_positive,
+                exp_negative=exp_negative,
+            )
 
         self._log(f"     └─ ✅ swap complete   loaded={len(self._sessions)} ZIP(s)")
 
-    def load_nest(self, folder: str, create: bool = False, mode: OpenMode = "r") -> None:
+    def load_nest(
+        self,
+        folder: str,
+        create: bool = False,
+        mode: OpenMode = "r",
+        exp_positive: Optional[List[str]] = None,
+        exp_negative: Optional[List[str]] = None,
+    ) -> None:
         """フォルダ配下のすべての .zip ファイルを再帰的に検索してロードする"""
         folder_path = Path(folder)
         self._log(f"  🔍 [Z_Lib] LOAD_NEST  ▶  scanning   › {folder_path.resolve()}")
@@ -137,7 +182,13 @@ class Z_Lib:
         zip_files = list(folder_path.rglob("*.zip"))
         self._log(f"     └─ 🗂  found {len(zip_files)} ZIP file(s)")
         for zip_file in zip_files:
-            self.load_zip(str(zip_file), create=create, mode=mode)
+            self.load_zip(
+                str(zip_file),
+                create=create,
+                mode=mode,
+                exp_positive=exp_positive,
+                exp_negative=exp_negative,
+            )
 
     def commit(self, *paths: str) -> None:
         """編集内容を元ZIPへ確定保存する。引数なしの場合は全セッションが対象"""

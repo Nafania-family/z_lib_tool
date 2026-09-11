@@ -2,7 +2,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from ._types import OpenMode, ProgressCallback, SessionStatus
 from .backend.zipfile_backend import extract_zip_safely, compress_directory_to_zip
@@ -18,12 +18,23 @@ class ZipSession:
         create: bool = False,
         workspace_dir: Optional[str] = None,
         on_progress: Optional[ProgressCallback] = None,
+        exp_positive: Optional[List[str]] = None,
+        exp_negative: Optional[List[str]] = None,
     ):
         self.original_path = Path(path).resolve()
         self.mode = mode
         self.create = create
         self.workspace_dir = Path(workspace_dir) if workspace_dir else None
         self.on_progress = on_progress
+        self.exp_positive = exp_positive
+        self.exp_negative = exp_negative
+
+        # 展開から除外されたファイルが存在する状態で再圧縮すると元データが欠落するため、フィルターは読み取り専用に限定する
+        if (self.exp_positive or self.exp_negative) and self.mode == "rw":
+            raise ValueError(
+                "Selective extraction with exp_positive/exp_negative is only supported in "
+                "read-only mode ('r') to prevent accidental loss of unextracted files on commit."
+            )
 
         self.status: SessionStatus = "loaded"
         self.is_dirty: bool = False
@@ -62,7 +73,12 @@ class ZipSession:
 
             self._notify("extract", 0.4, f"Extracting {self.original_path.name} locally")
             try:
-                extract_zip_safely(self.local_zip_copy, self.temp_dir)
+                extract_zip_safely(
+                    self.local_zip_copy,
+                    self.temp_dir,
+                    exp_positive=self.exp_positive,
+                    exp_negative=self.exp_negative,
+                )
             except Exception as e:
                 self.close(save=False)
                 raise ZipPathError(f"Failed to extract ZIP safely: {self.original_path} ({e})") from e

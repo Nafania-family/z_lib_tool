@@ -43,26 +43,32 @@ def find_matching_session(path: str, sessions: Dict[str, Any]) -> Tuple[Optional
     """
     指定パスに該当するロード済みセッション（またはZipHandle）を最長一致で検索する。
     キーの照合はnormalize_lookup_keyで行い、環境依存の表記揺れを防ぐ。
+    システムコールのオーバーヘッドを避けるため、メモリ辞書一致を最優先する。
     """
     norm_path = normalize_path(path)
     parts = norm_path.split("/")
 
-    # 1. 物理パス解決によるキー一致の検索
-    for i in range(len(parts), 0, -1):
-        potential = "/".join(parts[:i])
-        lookup_key = normalize_lookup_key(potential)
-        if lookup_key in sessions:
-            session = sessions[lookup_key]
-            internal_path = "/".join(parts[i:])
-            return session, internal_path
-
-    # 2. テスト用モックパスや未作成パス向けの単純一致フォールバック
+    # 1. メモリ上の辞書キー直接ヒット（システムコールゼロ）
     for i in range(len(parts), 0, -1):
         potential = "/".join(parts[:i])
         if potential in sessions:
-            session = sessions[potential]
-            internal_path = "/".join(parts[i:])
-            return session, internal_path
+            return sessions[potential], "/".join(parts[i:])
+
+    # 2. .zip候補に限定した物理パス解決によるキー照合
+    for i in range(len(parts), 0, -1):
+        if parts[i - 1].lower().endswith(".zip"):
+            potential = "/".join(parts[:i])
+            lookup_key = normalize_lookup_key(potential)
+            if lookup_key in sessions:
+                return sessions[lookup_key], "/".join(parts[i:])
+
+    # 3. 拡張子が.zip以外の特殊ファイル名や相対パスに対するフォールバック
+    if sessions:
+        for i in range(len(parts), 0, -1):
+            potential = "/".join(parts[:i])
+            lookup_key = normalize_lookup_key(potential)
+            if lookup_key in sessions:
+                return sessions[lookup_key], "/".join(parts[i:])
 
     return None, path
 

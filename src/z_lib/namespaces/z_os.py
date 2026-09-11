@@ -1,5 +1,5 @@
 import os
-from typing import Any, Iterator, List, Tuple, TYPE_CHECKING
+from typing import Any, Iterator, List, Tuple, Optional, Set, TYPE_CHECKING
 from pathlib import Path
 from ..path_resolver import normalize_path, find_matching_session
 from .z_os_path import Z_OS_Path
@@ -86,10 +86,26 @@ class Z_OS:
         followlinks: bool = False
     ) -> Iterator[Tuple[str, List[str], List[str]]]:
         self._z_lib._log(f"  🔎 [Z_OS] walk   topdown={topdown}   › {top}")
-        yield from self._walk_recursive(normalize_path(top), topdown, onerror, followlinks)
+        # 再帰走査中のPath.resolve()システムコール多発を防ぐため、走査開始時に1回だけセットを作成する
+        loaded_zip_paths = {
+            (s.original_path.resolve() if hasattr(s, "original_path") else Path(s["path"]).resolve())
+            for s in self._z_lib._sessions.values()
+        }
+        yield from self._walk_recursive(
+            normalize_path(top),
+            topdown,
+            onerror,
+            followlinks,
+            loaded_zip_paths=loaded_zip_paths,
+        )
 
     def _walk_recursive(
-        self, virtual_top: str, topdown: bool, onerror: Any, followlinks: bool
+        self,
+        virtual_top: str,
+        topdown: bool,
+        onerror: Any,
+        followlinks: bool,
+        loaded_zip_paths: Optional[Set[Path]] = None,
     ) -> Iterator[Tuple[str, List[str], List[str]]]:
         sessions = self._z_lib._sessions
 
@@ -127,21 +143,21 @@ class Z_OS:
                 onerror(e)
             return
 
-        # ロード済みZIPの絶対パス集合
-        loaded_zip_paths = set()
-        for s in sessions.values():
-            p = s.original_path if hasattr(s, "original_path") else Path(s["path"])
-            loaded_zip_paths.add(p.resolve())
+        if loaded_zip_paths is None:
+            loaded_zip_paths = {
+                (s.original_path.resolve() if hasattr(s, "original_path") else Path(s["path"]).resolve())
+                for s in sessions.values()
+            }
 
         sub_dirs: List[str] = []
         sub_files: List[str] = []
         zip_entries: List[str] = []
 
         for entry in entries:
-            entry_resolved = entry.resolve()
             if entry.is_dir() and not (entry.is_symlink() and not followlinks):
                 sub_dirs.append(entry.name)
-            elif entry_resolved in loaded_zip_paths:
+            # ロード対象になり得る.zip拡張子のみresolve()を実行してシステムコールを抑制
+            elif entry.name.lower().endswith(".zip") and entry.resolve() in loaded_zip_paths:
                 zip_entries.append(entry.name)
             else:
                 sub_files.append(entry.name)
@@ -153,11 +169,11 @@ class Z_OS:
 
         for d in sub_dirs:
             child_virtual = f"{virtual_top}/{d}"
-            yield from self._walk_recursive(child_virtual, topdown, onerror, followlinks)
+            yield from self._walk_recursive(child_virtual, topdown, onerror, followlinks, loaded_zip_paths)
 
         for zname in zip_entries:
             child_virtual = normalize_path(str((real_top / zname).resolve()))
-            yield from self._walk_recursive(child_virtual, topdown, onerror, followlinks)
+            yield from self._walk_recursive(child_virtual, topdown, onerror, followlinks, loaded_zip_paths)
 
         if not topdown:
             yield virtual_top, virtual_dirs, sub_files

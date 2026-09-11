@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Set
 
 from .._types import ZipHandle, OpenMode
 from ..exceptions import ZipPathError, ZipSecurityError, ZipSaveError
@@ -53,22 +53,53 @@ def _sanitize_and_validate_path(entry_name: str, dest_dir: Path) -> Path:
     return target_path
 
 
-def extract_zip_safely(zip_path: Path, dest_dir: Path) -> None:
+def _normalize_extensions(exts: Optional[List[str]]) -> Optional[Set[str]]:
+    if not exts:
+        return None
+    normalized = set()
+    for e in exts:
+        s = str(e).strip().lower()
+        if not s.startswith("."):
+            s = f".{s}"
+        normalized.add(s)
+    return normalized
+
+
+def extract_zip_safely(
+    zip_path: Path,
+    dest_dir: Path,
+    exp_positive: Optional[List[str]] = None,
+    exp_negative: Optional[List[str]] = None,
+) -> None:
     dest_dir.mkdir(parents=True, exist_ok=True)
+    pos_set = _normalize_extensions(exp_positive)
+    neg_set = _normalize_extensions(exp_negative)
+    has_filter = (pos_set is not None) or (neg_set is not None)
+
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
             for info in zf.infolist():
                 decoded_name = _decode_zip_filename(zf, info)
-                target_path = _sanitize_and_validate_path(decoded_name, dest_dir)
+                is_directory = decoded_name.endswith("/") or info.is_dir()
 
-                if decoded_name.endswith("/") or info.is_dir():
-                    target_path.mkdir(parents=True, exist_ok=True)
-                else:
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    with zf.open(info) as src, open(target_path, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
+                if is_directory:
+                    # フィルター指定時は空ディレクトリの無駄な生成を抑止し、ファイル展開時の親ディレクトリ作成に委ねる
+                    if not has_filter:
+                        target_path = _sanitize_and_validate_path(decoded_name, dest_dir)
+                        target_path.mkdir(parents=True, exist_ok=True)
+                    continue
+
+                suffix = Path(decoded_name).suffix.lower()
+                if pos_set is not None and suffix not in pos_set:
+                    continue
+                if neg_set is not None and suffix in neg_set:
+                    continue
+
+                target_path = _sanitize_and_validate_path(decoded_name, dest_dir)
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, open(target_path, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
     except Exception:
-        # 展開途中の破損やセキュリティ例外時に不完全な残骸を残さない
         if dest_dir.exists():
             shutil.rmtree(dest_dir, ignore_errors=True)
         raise
