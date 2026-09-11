@@ -6,17 +6,13 @@ Python **3.12以上**が必要です。実行時の追加依存はありませ�
 
 ## インストール
 
-リポジトリを取得したディレクトリで、既存のロックファイルを使って環境を作成します。
+利用するPythonプロジェクトのディレクトリで、GitHubから依存ライブラリとして追加します。
 
 ```console
-uv sync --locked
+uv add git+https://github.com/Nafania-family/z-lib-tool.git
 ```
 
-別のプロジェクトからローカルのチェックアウトを利用する場合：
-
-```console
-uv add /path/to/z_lib_tool
-```
+インストール後は `from z_lib import Z_Lib` で利用できます。Z_Lib自体を開発する場合の環境構築・テスト手順は [開発ガイド](docs/development.md) を参照してください。
 
 ## 読み取り
 
